@@ -1,0 +1,85 @@
+﻿Specyfikacja dla agenta: aplikacja Android do obsługi Mi Band 10 (zamiennik WatchDrip i Mi Fitness)
+1. Cel
+Aplikacja na Androida, która:
+    1. paruje się z Mi Band 10 przez BLE i utrzymuje z nim połączenie, 
+    2. przekazuje powiadomienia z telefonu na zegarek (ikona, tekst, wibracja), 
+    3. odbiera wartości CGM z xDrip+  i wysyła je na zegarek po otrzymaniu kolejnego odczytu
+    4. w późniejszym etapie synchronizuje dane zdrowotne (kroki, tętno, sen). 
+Aplikacja nie jest wyrobem medycznym i nie może sama podejmować decyzji terapeutycznych.
+2. Zakres
+W zakresie (MVP): parowanie i autoryzacja, odczyt baterii i czasu, powiadomienia, odbiór CGM i wysyłka na zegarek, praca w tle.
+Poza zakresem (etap 2): instalacja tarcz .face, synchronizacja zdrowia, wsparcie innych modeli niż Mi Band 10, wysyłka danych na zewnętrzne serwery.
+3. Ograniczenia i zasady
+    • Zezwalam na modyfikację i dekompilować Mi Fitness,  Notify for Xiaomi,  Gadgetbridge
+    • Dane zdrowotne i glukozy przechowywać lokalnie. Brak wysyłki na zewnętrzne serwery poza jawnie skonfigurowanym Nightscout przez użytkownika. 
+4. Stos technologiczny
+    • Kotlin, Android (minSdk 26 lub wyżej), Jetpack Compose do UI. 
+    • Android BLE API (lub Nordic BLE Library) do komunikacji. 
+    • Kotlin Coroutines i Flow. 
+    • Room do lokalnej historii (CGM, powiadomienia, logi). 
+    • WorkManager lub foreground service do pracy w tle. 
+    • Retrofit lub Ktor do Nightscout API. 
+5. Architektura
+Moduł	Odpowiedzialność
+ble	skanowanie, połączenie, parowanie, autoryzacja, reconnect, kolejka zapisów
+protocol	kodowanie/dekodowanie ramek Huami/Mi Band, szyfrowanie, obsługa auth key
+notifications	NotificationListenerService, filtrowanie, mapowanie na pakiety dla zegarka
+cgm	odbiór z xDrip+ (broadcast Intent) lub Nightscout, walidacja, harmonogram wysyłki
+service	foreground service utrzymujący połączenie i harmonogram
+storage	Room: urządzenia, odczyty CGM, log zdarzeń
+ui	ekran parowania, status połączenia, ustawienia, podgląd logów
+Interfejsy między modułami wykonać jako abstrakcje (np. WatchTransport), aby moduł protocol dało się testować bez zegarka.
+6. Wymagania funkcjonalne
+6.1 Parowanie i połączenie
+    • Skanowanie BLE z filtrem na nazwę/usługę Mi Band 10. 
+    • Parowanie wymaga auth key. Dodać ekran do wprowadzenia klucza ręcznie (hex) oraz zapis w bezpiecznym magazynie (EncryptedSharedPreferences lub Android Keystore). 
+    • Autoryzacja: po połączeniu wykonać handshake zgodny z ustalonym protokołem. Przy błędzie zakończyć sesję z czytelnym komunikatem, bez pętli ponownych prób. 
+    • Automatyczny reconnect z wykładniczym backoffem (np. 5 s, 10 s, 30 s, maks. 5 min). 
+    • Status połączenia widoczny w UI: rozłączony, łączenie, autoryzacja, połączony, błąd. 
+6.2 Powiadomienia
+    • Przechwytywanie powiadomień przez NotificationListenerService. 
+    • Filtr: whitelist aplikacji wybranych przez użytkownika. 
+    • Wysyłka: tytuł, tekst (obcięty do limitu protokołu), ikona aplikacji (jeśli protokół na to pozwala), wibracja. 
+    • Kolejka z limitem i deduplikacją, aby nie zalać zegarka. 
+6.3 CGM
+    • Źródło A: odbiór broadcastów z xDrip+ (wartość, trend, timestamp). 
+    • Źródło B: pobieranie ostatnich wpisów z Nightscout API (URL i token ustawiane przez użytkownika). 
+    • Przeliczanie jednostek: mg/dL i mmol/L (użytkownik wybiera; domyślnie zgodnie z ustawieniami źródła). 
+    • Wysyłka na zegarek co 5 min lub przy nowym odczycie, wraz z trendem i wiekiem danych. 
+    • Alarmy progowe (niski/wysoki) z wibracją na zegarku i powiadomieniem na telefonie. Progi konfigurowalne. Alarm nie zastępuje alarmów z pompy lub CGM. 
+    • Jeśli dane są starsze niż próg, wyświetlić ostrzeżenie zamiast ostatniej wartości. 
+6.4 Ustawienia
+    • Wybór źródła CGM, URL i token Nightscout, jednostki, progi alarmów, whitelist aplikacji, interwał odświeżania. 
+6.5 Logi i diagnostyka
+    • Log zdarzeń BLE (bez auth key) z eksportem do pliku. 
+    • Tryb debug zapisujący ramki hex do analizy protokołu. 
+7. Zadania do rozstrzygnięcia przed kodowaniem (spike)
+Agent ma najpierw wykonać te punkty i udokumentować wyniki w docs/protocol.md:
+    1. Ustalić UUID usług i charakterystyk Mi Band 10 z logu HCI parowania w oficjalnej aplikacji. 
+    2. Ustalić sekwencję autoryzacji i format auth key dla Mi Band 10. Porównać z protokołem Gadgetbridge dla starszych modeli i wskazać różnice. 
+    3. Potwierdzić, że połączenie, odczyt baterii i odczyt czasu działają. 
+    4. Potwierdzić wysyłkę powiadomienia tekstowego i wibracji. 
+Jeśli punkt 2 nie daje się rozwiązać, zatrzymać projekt i zgłosić wynik spike'a zamiast implementować obejścia.
+8. Wymagania niefunkcjonalne
+    • Zużycie baterii telefonu: brak aktywnego skanowania poza potrzebą, połączenie utrzymywane tylko gdy aplikacja ma aktywne zadanie. 
+    • Odporność: zerwanie BLE, restart telefonu, brak internetu (CGM z xDrip+ działa bez sieci). 
+    • Wszystkie ciągi UI w strings.xml (polski jako domyślny, angielski jako alternatywa). 
+    • Logika protokołu z testami jednostkowymi (kodowanie ramek, parsowanie, konwersja jednostek, walidacja wieku odczytu). 
+9. Kryteria akceptacji (MVP)
+    • [ ] Parowanie z Mi Band 10 zakończone sukcesem na co najmniej jednym egzemplarzu i jednej wersji firmware. 
+    • [ ] Po restarcie telefonu połączenie wraca automatycznie w ciągu 2 min. 
+    • [ ] Powiadomienie z wybranej aplikacji pojawia się na zegarku z wibracją w ciągu 5 s. 
+    • [ ] Odczyt CGM z xDrip+ jest wysyłany na zegarek w ciągu 1 min od odbioru. 
+    • [ ] Odczyt starszy niż próg jest oznaczony jako nieaktualny. 
+    • [ ] Alarm progowy wibruje na zegarku przy przekroczeniu progu. 
+    • [ ] Testy jednostkowe modułu protocol przechodzą. 
+    • [ ] docs/protocol.md opisuje użyte UUID, sekwencję autoryzacji i znane ograniczenia. 
+10. Dostarczalne artefakty
+    • Kod źródłowy zgodny z architekturą z pkt 5. 
+    • docs/protocol.md (wyniki spike'a). 
+    • README.md z instrukcją parowania, konfiguracji Nightscout i ostrzeżeniem medycznym. 
+    • Lista znanych problemów i przetestowanych wersji firmware. 
+11. Pytania otwarte (agent ma je zgłosić, nie zgadywać)
+    • Która wersja firmware Mi Band 10 jest testowana? 
+    • Jakie są progi alarmów domyślne i czy użytkownik musi je potwierdzić przed użyciem? 
+
